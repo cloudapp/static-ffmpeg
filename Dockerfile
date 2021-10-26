@@ -474,10 +474,9 @@ RUN \
     tar xf libmodplug.tar.gz && \
     cd libmodplug-* && ./configure --enable-static --disable-shared && make -j$(nproc) install
 
-# sed changes --toolchain=hardened -pie to -static-pie
-# extra libs stdc++ is for vmaf https://github.com/Netflix/vmaf/issues/788
+# build old patched ffmpeg
 RUN git clone https://github.com/jjustman/ffmpeg-hls-pts-discontinuity-reclock && \
-  cd ffmpeg-* && \
+  cd ffmpeg-hls-pts-* && \
   sed -i 's/add_ldexeflags -fPIE -pie/add_ldexeflags -fPIE -static-pie/' configure && \
   ./configure \
   --pkg-config-flags=--static \
@@ -521,6 +520,70 @@ RUN git clone https://github.com/jjustman/ffmpeg-hls-pts-discontinuity-reclock &
   && make -j$(nproc) install tools/qt-faststart \
   && cp tools/qt-faststart /usr/local/bin
 
+RUN mv /usr/local/bin/ffmpeg /ffmpeg-patched && mv /usr/local/bin/ffprobe /ffprobe-patched
+# make sure binaries has no dependencies, is relro, pie and stack nx
+COPY checkelf /
+RUN \
+  /checkelf /ffmpeg-patched && \
+  /checkelf /ffprobe-patched
+
+# sed changes --toolchain=hardened -pie to -static-pie
+# extra libs stdc++ is for vmaf https://github.com/Netflix/vmaf/issues/788
+RUN \
+  wget -O ffmpeg.tar.bz2 "$FFMPEG_URL" && \
+  echo "$FFMPEG_SHA256  ffmpeg.tar.bz2" | sha256sum --status -c - && \
+  tar xf ffmpeg.tar.bz2 && \
+  cd ffmpeg-* && \
+  sed -i 's/add_ldexeflags -fPIE -pie/add_ldexeflags -fPIE -static-pie/' configure && \
+  ./configure \
+  --pkg-config-flags=--static \
+  --extra-cflags="-fopenmp" \
+  --extra-ldflags="-fopenmp" \
+  --extra-libs="-lstdc++" \
+  --toolchain=hardened \
+  --disable-debug \
+  --disable-shared \
+  --disable-ffplay \
+  --enable-static \
+  --enable-gpl \
+  --enable-gray \
+  --enable-nonfree \
+  --enable-openssl \
+  --enable-iconv \
+  --enable-libxml2 \
+  --enable-libmp3lame \
+  --enable-libfdk-aac \
+  --enable-libvorbis \
+  --enable-libopus \
+  --enable-libtheora \
+  --enable-libvpx \
+  --enable-libx264 \
+  --enable-libx265 \
+  --enable-libwebp \
+  --enable-libspeex \
+  --enable-libaom \
+  --enable-libvidstab \
+  --enable-libkvazaar \
+  --enable-libfreetype \
+  --enable-fontconfig \
+  --enable-libfribidi \
+  --enable-libass \
+  --enable-libzimg \
+  --enable-libsoxr \
+  --enable-libopenjpeg \
+  --enable-libdav1d \
+  --enable-libxvid \
+  --enable-librav1e \
+  --enable-libsrt \
+  --enable-libsvtav1 \
+  --enable-libdavs2 \
+  --enable-libxavs2 \
+  --enable-libvmaf \
+  --enable-libmodplug \
+  || (cat ffbuild/config.log ; false) \
+  && make -j$(nproc) install tools/qt-faststart \
+  && cp tools/qt-faststart /usr/local/bin
+
 # make sure binaries has no dependencies, is relro, pie and stack nx
 COPY checkelf /
 RUN \
@@ -533,10 +596,13 @@ LABEL maintainer="Mattias Wadman mattias.wadman@gmail.com"
 COPY --from=builder /versions.json /usr/local/bin/ffmpeg /usr/local/bin/ffprobe /usr/local/bin/qt-faststart /
 COPY --from=builder /usr/local/share/doc/ffmpeg/* /doc/
 COPY --from=builder /etc/ssl/cert.pem /etc/ssl/cert.pem
+COPY --from=builder /ffmpeg-patched /ffprobe-patched /
 # sanity tests
 RUN ["/ffmpeg", "-version"]
 RUN ["/ffprobe", "-version"]
 RUN ["/qt-faststart", "-version"]
 RUN ["/ffprobe", "-i", "https://github.com/favicon.ico"]
 RUN ["/ffprobe", "-tls_verify", "1", "-ca_file", "/etc/ssl/cert.pem", "-i", "https://github.com/favicon.ico"]
+RUN ["/ffmpeg-patched", "-version"]
+RUN ["/ffprobe-patched", "-version"]
 ENTRYPOINT ["/ffmpeg"]
